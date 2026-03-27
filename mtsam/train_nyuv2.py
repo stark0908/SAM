@@ -1,4 +1,4 @@
-import torch
+# import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
@@ -160,7 +160,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, save_d
 
     # Training loop
     num_epochs = 100
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     model.to(device)
 
     for epoch in range(num_epochs):
