@@ -42,8 +42,7 @@ def verify_dataset_structure(root_dir):
     """Verify that the dataset has the expected structure."""
     required_dirs = [
         'train/rgb', 'train/depth', 'train/seg', 'train/normals',
-        'val/rgb', 'val/depth', 'val/seg', 'val/normals',
-        'test/rgb', 'test/depth', 'test/seg', 'test/normals'
+        'val/rgb', 'val/depth', 'val/seg', 'val/normals'
     ]
 
     root_path = Path(root_dir)

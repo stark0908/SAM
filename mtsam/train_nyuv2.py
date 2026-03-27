@@ -150,10 +150,10 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, save_d
 
     # Dataset and DataLoader
     train_dataset = NYUv2Dataset(root_dir=data_dir, split='train')
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
 
     val_dataset = NYUv2Dataset(root_dir=data_dir, split='val')
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
