@@ -19,7 +19,7 @@ class NYUv2Dataset(Dataset):
         self.root_dir = root_dir
         self.split = split
         self.transform = transform
-        self.target_size = target_size
+        self.target_size = (480, 640)  # (H, W)
 
         # NYUv2 structure (assuming processed PNG format)
         # You may need to adjust paths based on your dataset preparation
@@ -44,42 +44,45 @@ class NYUv2Dataset(Dataset):
         img_name = self.image_files[idx]
         base_name = os.path.splitext(img_name)[0]
 
+        # ✅ FIX: PIL expects (W, H)
+        resize_size = (self.target_size[1], self.target_size[0])
+
         # Load RGB image
         img_path = os.path.join(self.image_dir, img_name)
         image = Image.open(img_path).convert('RGB')
-        image = image.resize(self.target_size, Image.BILINEAR)
+        image = image.resize(resize_size, Image.BILINEAR)
         image = np.array(image)
 
         # Load depth map
         depth_path = os.path.join(self.depth_dir, f"{base_name}.png")
         if os.path.exists(depth_path):
             depth = Image.open(depth_path)
-            depth = depth.resize(self.target_size, Image.BILINEAR)
+            depth = depth.resize(resize_size, Image.BILINEAR)
             depth = np.array(depth, dtype=np.float32)
-            # Normalize depth (assuming it's in mm, convert to meters)
-            if depth.max() > 100:  # Likely in mm
+
+            if depth.max() > 100:
                 depth = depth / 1000.0
         else:
-            # Create dummy depth if not available
             depth = np.zeros(self.target_size, dtype=np.float32)
 
-        # Load semantic segmentation
+        # Load segmentation
         seg_path = os.path.join(self.seg_dir, f"{base_name}.png")
         if os.path.exists(seg_path):
             seg = Image.open(seg_path)
-            seg = seg.resize(self.target_size, Image.NEAREST)
+            seg = seg.resize(resize_size, Image.NEAREST)
             seg = np.array(seg, dtype=np.int64)
         else:
             seg = np.zeros(self.target_size, dtype=np.int64)
 
-        # Load surface normals
+        # Load normals
         normals_path = os.path.join(self.normals_dir, f"{base_name}.png")
         if os.path.exists(normals_path):
             normals = Image.open(normals_path)
-            normals = normals.resize(self.target_size, Image.BILINEAR)
-            normals = np.array(normals, dtype=np.float32) / 255.0  # Normalize to [0,1]
+            normals = normals.resize(resize_size, Image.BILINEAR)
+            normals = np.array(normals, dtype=np.float32) / 255.0
         else:
-            normals = np.zeros((self.target_size[1], self.target_size[0], 3), dtype=np.float32)
+            # ✅ FIX: correct (H, W, 3)
+            normals = np.zeros((self.target_size[0], self.target_size[1], 3), dtype=np.float32)
 
         # Convert to tensors
         image = torch.from_numpy(image).permute(2, 0, 1).float()
@@ -96,7 +99,7 @@ class NYUv2Dataset(Dataset):
 
 def get_loss_function(task_idx, pred, target):
     if task_idx == 0:  # Semantic segmentation
-        return F.cross_entropy(pred, target.squeeze(1), ignore_index=255)
+        return F.cross_entropy(pred, target, ignore_index=255)
     elif task_idx == 1:  # Depth estimation
         return F.mse_loss(pred, target)
     elif task_idx == 2:  # Surface normals
@@ -160,7 +163,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, save_d
 
     # Training loop
     num_epochs = 100
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     model.to(device)
 
     for epoch in range(num_epochs):
