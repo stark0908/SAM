@@ -397,8 +397,8 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     train_set, val_set = create_splits(dataset, seed=seed)
 
     log_section("DataLoaders")
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=2, pin_memory=True)
-    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=8, persistent_workers=True, pin_memory=True)
+    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=8, persistent_workers=True, pin_memory=True)
     log(f"Train loader: {len(train_loader)} batches")
     log(f"Val   loader: {len(val_loader)} batches")
 
