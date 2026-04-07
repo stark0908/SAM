@@ -156,6 +156,12 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=2)
 
+    for i in range(5):
+        mask = dataset[i]["segmentation"]
+        print(torch.unique(mask))
+
+
+
     # -------- OPTIMIZER --------
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
