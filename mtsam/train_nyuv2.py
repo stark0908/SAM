@@ -114,7 +114,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     image_size = 1024
     num_tasks = 3
 
-    task_channels = [13, 1, 3]   # ✅ STRICT 13 CLASS
+    task_channels = [14, 1, 3]   # ✅ STRICT 14 CLASS
 
     # -------- MODEL --------
     image_encoder = ImageEncoderViT(
@@ -157,7 +157,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=2)
 
     for i in range(1,5):
-        mask = dataset[i]["segmentation"]
+        mask = dataset[i]["seg"]
         print(torch.unique(mask))
 
 
