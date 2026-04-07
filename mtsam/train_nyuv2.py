@@ -14,7 +14,8 @@ from mask_decoder import TaskDecoder
 from transformer import TwoWayTransformer
 import torch.nn.functional as F
 
-TASK_NAMES = ["Segmentation", "Depth", "Normals"]
+TASK_NAMES   = ["Segmentation", "Depth", "Normals"]
+NUM_SEG_CLASSES = 13   # used for mIoU computation (ignore class 0 = unlabelled if needed)
 
 # ---------------------------
 # LOGGING HELPER
@@ -30,13 +31,102 @@ def log_section(title):
     print(f"  {title}")
     print("=" * width)
 
-def log_task_losses(tag, losses_dict, epoch=None):
+def log_task_losses(tag, losses_dict, metrics_dict, epoch=None):
     prefix = f"Epoch {epoch:>3d} | " if epoch is not None else ""
-    parts = [f"{prefix}{tag}"]
-    for task_name, val in losses_dict.items():
-        parts.append(f"{task_name}: {val:.4f}")
-    parts.append(f"Total: {sum(losses_dict.values()):.4f}")
-    print("  |  ".join(parts))
+    print(f"\n  {prefix}[{tag}]")
+    # Segmentation
+    print(f"    Segmentation  —  Loss: {losses_dict['Segmentation']:.4f}  |  "
+          f"Pixel Acc: {metrics_dict['seg_pixel_acc']*100:.2f}%  |  "
+          f"mIoU: {metrics_dict['seg_miou']*100:.2f}%")
+    # Depth
+    print(f"    Depth         —  Loss: {losses_dict['Depth']:.4f}  |  "
+          f"RMSE: {metrics_dict['dep_rmse']:.4f}  |  "
+          f"δ<1.25: {metrics_dict['dep_delta1']*100:.2f}%")
+    # Normals
+    print(f"    Normals       —  Loss: {losses_dict['Normals']:.4f}  |  "
+          f"Mean Angle Err: {metrics_dict['nor_mean_angle']:.2f}°  |  "
+          f"Within 11.25°: {metrics_dict['nor_within_1125']*100:.2f}%")
+    # Total
+    print(f"    Total Loss: {sum(losses_dict.values()):.4f}")
+
+
+# ---------------------------
+# ACCURACY METRICS
+# ---------------------------
+
+def seg_metrics(pred_logits, target, num_classes=NUM_SEG_CLASSES, ignore_index=255):
+    """
+    Pixel accuracy and mean IoU (ignoring label 255).
+    pred_logits : (B, C, H, W)
+    target      : (B, H, W)  long
+    """
+    pred_labels = pred_logits.argmax(dim=1)          # (B, H, W)
+    valid_mask  = target != ignore_index
+
+    # Pixel accuracy
+    correct   = ((pred_labels == target) & valid_mask).sum().item()
+    total     = valid_mask.sum().item()
+    pixel_acc = correct / (total + 1e-8)
+
+    # mIoU — accumulate confusion matrix
+    iou_list = []
+    for cls in range(num_classes):
+        pred_c   = (pred_labels == cls) & valid_mask
+        target_c = (target      == cls) & valid_mask
+        inter    = (pred_c & target_c).sum().item()
+        union    = (pred_c | target_c).sum().item()
+        if union > 0:
+            iou_list.append(inter / union)
+    miou = float(np.mean(iou_list)) if iou_list else 0.0
+
+    return pixel_acc, miou
+
+
+def depth_metrics(pred, target):
+    """
+    RMSE and δ<1.25 threshold accuracy.
+    pred/target : (B, 1, H, W)  float, in metres
+    """
+    pred   = pred.squeeze(1)    # (B, H, W)
+    target = target.squeeze(1)
+
+    # mask out zero/invalid depth
+    valid = target > 0
+
+    pred_v   = pred[valid]
+    target_v = target[valid]
+
+    rmse  = torch.sqrt(F.mse_loss(pred_v, target_v)).item()
+
+    # δ threshold: max(pred/target, target/pred) < 1.25
+    ratio   = torch.max(pred_v / (target_v + 1e-8), target_v / (pred_v + 1e-8))
+    delta1  = (ratio < 1.25).float().mean().item()
+
+    return rmse, delta1
+
+
+def normals_metrics(pred, target):
+    """
+    Mean angular error (degrees) and % within 11.25°.
+    pred/target : (B, 3, H, W)  float, values in [0,1] normalised from uint8.
+    We re-map to [-1, 1] and then compute cosine similarity per pixel.
+    """
+    # re-map [0,1] → [-1,1]
+    pred_n   = pred   * 2.0 - 1.0     # (B, 3, H, W)
+    target_n = target * 2.0 - 1.0
+
+    # normalise to unit vectors
+    pred_n   = F.normalize(pred_n,   dim=1)
+    target_n = F.normalize(target_n, dim=1)
+
+    # cosine similarity per pixel  →  clamp to avoid acos domain errors
+    cos_sim     = (pred_n * target_n).sum(dim=1).clamp(-1.0, 1.0)  # (B, H, W)
+    angle_err   = torch.acos(cos_sim) * (180.0 / np.pi)            # degrees
+
+    mean_angle    = angle_err.mean().item()
+    within_1125   = (angle_err < 11.25).float().mean().item()
+
+    return mean_angle, within_1125
 
 
 # ---------------------------
@@ -145,6 +235,14 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
     task_totals = {name: 0.0 for name in TASK_NAMES}
     num_batches = len(loader)
 
+    # Metric accumulators
+    seg_pixel_acc_total  = 0.0
+    seg_miou_total       = 0.0
+    dep_rmse_total       = 0.0
+    dep_delta1_total     = 0.0
+    nor_mean_angle_total = 0.0
+    nor_within_1125_total = 0.0
+
     pbar = tqdm(
         loader,
         desc=f"Epoch {epoch:>3d}/{num_epochs} [{phase:<5}]",
@@ -167,6 +265,7 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
                 optimizer.zero_grad()
 
             losses = []
+            preds  = []
             for task_idx, (target, task_name) in enumerate(zip(targets, TASK_NAMES)):
                 batched_input = [{'image': images[i]} for i in range(images.size(0))]
                 pred = model(batched_input, task_idx=task_idx)['masks']
@@ -181,6 +280,7 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
 
                 loss = get_loss_function(task_idx, pred, target)
                 losses.append(loss)
+                preds.append(pred.detach())
                 task_totals[task_name] += loss.item()
 
             total_loss = sum(losses)
@@ -189,17 +289,40 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
                 total_loss.backward()
                 optimizer.step()
 
-            # Live tqdm postfix: show each task loss
+            # ---- Compute batch metrics ----
+            with torch.no_grad():
+                pa, miou  = seg_metrics(preds[0], targets[0])
+                rmse, d1  = depth_metrics(preds[1], targets[1])
+                mae, w11  = normals_metrics(preds[2], targets[2])
+
+            seg_pixel_acc_total   += pa
+            seg_miou_total        += miou
+            dep_rmse_total        += rmse
+            dep_delta1_total      += d1
+            nor_mean_angle_total  += mae
+            nor_within_1125_total += w11
+
+            # Live tqdm postfix
             pbar.set_postfix({
-                "seg":  f"{losses[0].item():.3f}",
-                "dep":  f"{losses[1].item():.3f}",
-                "nor":  f"{losses[2].item():.3f}",
-                "tot":  f"{total_loss.item():.3f}",
+                "seg_loss": f"{losses[0].item():.3f}",
+                "mIoU":     f"{miou*100:.1f}%",
+                "dep_rmse": f"{rmse:.3f}",
+                "δ<1.25":   f"{d1*100:.1f}%",
+                "nor_ang":  f"{mae:.1f}°",
+                "tot":      f"{total_loss.item():.3f}",
             })
 
     # Average over batches
     avg_losses = {name: task_totals[name] / num_batches for name in TASK_NAMES}
-    return avg_losses
+    avg_metrics = {
+        "seg_pixel_acc":   seg_pixel_acc_total   / num_batches,
+        "seg_miou":        seg_miou_total        / num_batches,
+        "dep_rmse":        dep_rmse_total        / num_batches,
+        "dep_delta1":      dep_delta1_total      / num_batches,
+        "nor_mean_angle":  nor_mean_angle_total  / num_batches,
+        "nor_within_1125": nor_within_1125_total / num_batches,
+    }
+    return avg_losses, avg_metrics
 
 
 # ---------------------------
@@ -274,8 +397,8 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     train_set, val_set = create_splits(dataset, seed=seed)
 
     log_section("DataLoaders")
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=8, pin_memory=True, persistent_workers=True)
-    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=8, pin_memory=True, persistent_workers=True)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=2, pin_memory=True)
+    val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     log(f"Train loader: {len(train_loader)} batches")
     log(f"Val   loader: {len(val_loader)} batches")
 
@@ -292,7 +415,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     model.to(device)
 
     # -------- BEST CHECKPOINT TRACKING --------
-    best_val_total = float('inf')
+    best_val_miou = 0.0
 
     # -------- TRAIN LOOP --------
     log_section("Training Start")
@@ -301,22 +424,17 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     for epoch in range(1, num_epochs + 1):
         epoch_start = time.time()
 
-        # Train
-        train_losses = run_epoch(model, train_loader, optimizer, device, epoch, num_epochs, phase="Train")
-        # Validate
-        val_losses   = run_epoch(model, val_loader,   optimizer, device, epoch, num_epochs, phase="Val")
+        train_losses, train_metrics = run_epoch(model, train_loader, optimizer, device, epoch, num_epochs, phase="Train")
+        val_losses,   val_metrics   = run_epoch(model, val_loader,   optimizer, device, epoch, num_epochs, phase="Val")
 
         scheduler.step()
 
-        epoch_time  = time.time() - epoch_start
-        val_total   = sum(val_losses.values())
-        train_total = sum(train_losses.values())
+        epoch_time = time.time() - epoch_start
 
-        # Per-task summary line
-        log_task_losses("Train", train_losses, epoch=epoch)
-        log_task_losses("Val  ", val_losses,   epoch=epoch)
+        # Per-task summary
+        log_task_losses("Train", train_losses, train_metrics, epoch=epoch)
+        log_task_losses("Val  ", val_losses,   val_metrics,   epoch=epoch)
 
-        # LR + timing
         current_lr = scheduler.get_last_lr()[0]
         log(
             f"Epoch {epoch:>3d} | LR: {current_lr:.2e}  "
@@ -325,17 +443,18 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
             symbol="→"
         )
 
-        # Best model checkpoint
-        if val_total < best_val_total:
-            best_val_total = val_total
-            log(f"★  New best val loss: {best_val_total:.4f} — saving checkpoint", symbol="★")
+        # Checkpoint on best val mIoU (primary task metric)
+        val_miou = val_metrics["seg_miou"]
+        if val_miou > best_val_miou:
+            best_val_miou = val_miou
+            log(f"★  New best val mIoU: {best_val_miou*100:.2f}% — saving checkpoint", symbol="★")
             torch.save(model.state_dict(), "best_mtsam.pth")
 
-        print()  # blank line between epochs for readability
+        print()  # blank line between epochs
 
     log_section("Training Complete")
-    log(f"Total time : {(time.time()-train_start)/60:.1f} min")
-    log(f"Best val   : {best_val_total:.4f}")
+    log(f"Total time    : {(time.time()-train_start)/60:.1f} min")
+    log(f"Best val mIoU : {best_val_miou*100:.2f}%")
 
 
 # ---------------------------
