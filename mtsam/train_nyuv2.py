@@ -328,7 +328,7 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
 # ---------------------------
 # TRAINING
 # ---------------------------
-def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=42, gpu=1):
+def train_mtsam_on_nyuv2(data_dir, batch_size=32, num_epochs=100, lr=1e-4, seed=42, gpu=1):
 
     log_section("Configuration")
     log(f"Data dir    : {data_dir}")
@@ -463,7 +463,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir',   type=str,   required=True)
-    parser.add_argument('--batch_size', type=int,   default=4)
+    parser.add_argument('--batch_size', type=int,   default=32)
     parser.add_argument('--num_epochs', type=int,   default=100)
     parser.add_argument('--lr',         type=float, default=1e-4)
     parser.add_argument('--seed',       type=int,   default=42)
