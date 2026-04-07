@@ -108,7 +108,7 @@ def get_loss_function(task_idx, pred, target):
 # ---------------------------
 # TRAINING
 # ---------------------------
-def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=42):
+def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=42, gpu=1):
 
     embed_dim = 256
     image_size = 1024
@@ -165,7 +165,12 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=4, num_epochs=100, lr=1e-4, seed=4
     # -------- OPTIMIZER --------
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device(f'cuda:{gpu}')
+        torch.cuda.set_device(device)
+    else:
+        device = torch.device('cpu')
+
     model.to(device)
 
     # ---------------- TRAIN LOOP ----------------
@@ -247,6 +252,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--gpu', type=int, default=1)
 
     args = parser.parse_args()
 
@@ -255,5 +261,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         lr=args.lr,
-        seed=args.seed
+        seed=args.seed,
+        gpu=args.gpu
     )
