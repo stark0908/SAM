@@ -82,3 +82,46 @@ class MTSam(nn.Module):
         padw = self.image_encoder.img_size - w
         x = F.pad(x, (0, padw, 0, padh))
         return x
+
+    def load_pretrained(self, ckpt_path: str) -> None:
+        """
+        Loads the pretrained SAM weights where applicable.
+        Maps the image_encoder directly and mask_decoder to each task_decoder.
+        Handles shape mismatches gracefully.
+        """
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        state_dict = checkpoint.get("model", checkpoint)
+            
+        mapped_state_dict = {}
+        for key, value in state_dict.items():
+            # Image Encoder
+            if key.startswith("image_encoder."):
+                mapped_state_dict[key] = value
+                
+            # Mask Decoder -> Task Decoders
+            elif key.startswith("mask_decoder."):
+                sub_key = key.replace("mask_decoder.", "")
+                for i in range(len(self.task_decoders)):
+                    task_key = f"task_decoders.{i}.{sub_key}"
+                    
+                    if sub_key == "mask_tokens.weight":
+                        # Original: (4, 256), Target: (2, 256)
+                        mapped_state_dict[task_key] = value[:2, :]
+                    elif sub_key.startswith("output_hypernetworks_mlps.0."):
+                        # Original is ModuleList, Target is single MLP
+                        new_key = task_key.replace("output_hypernetworks_mlps.0.", "output_hypernetworks_mlps.")
+                        mapped_state_dict[new_key] = value
+                    else:
+                        mapped_state_dict[task_key] = value
+
+        # Dynamic shape matching filter
+        model_state_dict = self.state_dict()
+        filtered_state_dict = {}
+        for k, v in mapped_state_dict.items():
+            if k in model_state_dict:
+                if v.shape == model_state_dict[k].shape:
+                    filtered_state_dict[k] = v
+
+        missing_keys, unexpected_keys = self.load_state_dict(filtered_state_dict, strict=False)
+        print(f"Loaded SAM weights from {ckpt_path}.")
+        print(f"Matched {len(filtered_state_dict)} parameters out of {len(state_dict)} in checkpoint.")

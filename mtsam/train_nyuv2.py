@@ -328,7 +328,7 @@ def run_epoch(model, loader, optimizer, device, epoch, num_epochs, phase="Train"
 # ---------------------------
 # TRAINING
 # ---------------------------
-def train_mtsam_on_nyuv2(data_dir, batch_size=32, num_epochs=100, lr=1e-4, seed=42, gpu=1):
+def train_mtsam_on_nyuv2(data_dir, sam_ckpt=None, batch_size=32, num_epochs=100, lr=1e-4, seed=42, gpu=1):
 
     log_section("Configuration")
     log(f"Data dir    : {data_dir}")
@@ -377,6 +377,11 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=32, num_epochs=100, lr=1e-4, seed=
         log(f"  {name:<15} → {ch} output channel(s)")
 
     model = MTSam(image_encoder=image_encoder, task_decoders=task_decoders)
+    
+    if sam_ckpt is not None:
+        log(f"Loading pretrained SAM weights from {sam_ckpt} ...")
+        model.load_pretrained(sam_ckpt)
+        
     model.image_encoder.freeze_w0()
 
     total_params     = sum(p.numel() for p in model.parameters())
@@ -463,6 +468,7 @@ def train_mtsam_on_nyuv2(data_dir, batch_size=32, num_epochs=100, lr=1e-4, seed=
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir',   type=str,   required=True)
+    parser.add_argument('--sam_ckpt',   type=str,   default=None, help='Path to standard SAM checkpoint to load')
     parser.add_argument('--batch_size', type=int,   default=32)
     parser.add_argument('--num_epochs', type=int,   default=100)
     parser.add_argument('--lr',         type=float, default=1e-4)
@@ -472,6 +478,7 @@ if __name__ == "__main__":
 
     train_mtsam_on_nyuv2(
         data_dir=args.data_dir,
+        sam_ckpt=args.sam_ckpt,
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
         lr=args.lr,
